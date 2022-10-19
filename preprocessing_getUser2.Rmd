@@ -1,0 +1,333 @@
+---
+title: "Untitled"
+author: "Ko"
+date: '2021 11 2 '
+output: html_document
+---
+
+# 기본 세팅
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(data.table)
+```
+
+```{r}
+data = fread("data_final.csv")
+```
+
+
+
+# 해보자
+- 유저별로 타는 차 분포는?
+- 일주일 동안 유저가 한 번이라도 탔으면 카운트 1
+- 매치별로 말고 차 개수만큼 카운트 되도록
+```{r}
+# 흠 근데 카트 정보가 없는 row가 73054개 존재..
+# 얘네는 파츠 정보도 다 없음
+
+# 
+data %>% 
+  filter(!str_detect(kart, "\\w"))
+
+data %>% distinct(accountNo, kart, kartName, .keep_all = T) %>% 
+  group_by(accountNo, Username, kart) %>% 
+  summarise(N=n())
+```
+
+- 유저와 유저코드간 일대일 매칭이 되나?
+```{r}
+# 같은 유저 코드인데 닉네임이 다르거나 반대인 경우는?
+# 코드, 닉네임 기준 172,645개
+
+# 1) 같은 닉네임에 유저코드 여러개 (34명)
+multiple_accountNo = data %>% 
+  mutate(accountNo = as.character(accountNo)) %>% 
+  distinct(accountNo, Username) %>% 
+  group_by(Username) %>% 
+  summarise(N=n()) %>% 
+  filter(N>1) %>% pull(Username)
+
+data %>% 
+  filter(Username %in% multiple_accountNo) %>% 
+  mutate(accountNo = as.character(accountNo))
+
+# 데이터 합칠 때 생긴 오류 같음
+# 19081810 가 1.9e+7 이렇게 표시돼서 그런 듯
+```
+
+
+
+```{r}
+# 2) 같은 유저코드에 닉네임이 여러개 (5872개), 
+# 얘네는 오류 + 닉변
+
+multiple_Username = data %>% 
+  mutate(accountNo = as.character(accountNo)) %>% 
+  distinct(accountNo, Username) %>% 
+  group_by(accountNo) %>% 
+  summarise(N=n()) %>% 
+  filter(N>1) %>% pull(accountNo)
+
+data %>% 
+  filter(accountNo %in% multiple_Username) %>% 
+  select(accountNo, Username) %>% 
+  distinct() %>% 
+  arrange(accountNo)
+```
+
+
+- 근데 닉변한 경우는 생각하지말고 그냥 유저코드 기준으로 다 계산하면 되는 거잖아?
+- `1.326e+09`이렇게 표시된 애들만 고치면 되겠다.
+- 유저코드가 위에 처럼 표시된 유저들 중에서 1) 닉변인 경우, 2) 다른 매치 기록이 없는 경우는?
+- 1)은 없음 (눈으로 다 확인)
+- 2)의 경우 직접 찾아서 넣기..
+```{r}
+# 표기가 이상해서 바꿔야 하는 것들
+Username_need_to_change = data %>% 
+  mutate(accountNo = as.character(accountNo)) %>%
+  filter(str_detect(accountNo, "[e]")) %>% 
+  pull(Username) %>% unique
+
+options(scipen = 100)
+
+# 바꿀 수 있는 것들
+can_replace_accountNo = data %>% 
+  filter(Username %in% Username_need_to_change) %>% 
+  distinct(accountNo, Username) %>% 
+  select(Username, accountNo) %>% 
+  arrange(Username) %>% 
+  group_by(Username) %>%
+  mutate(indicator = n()) %>% 
+  filter(indicator == 2) %>% 
+  mutate(indicator = c("fisrt", "second")) %>% 
+  spread(key = indicator, value = accountNo) %>% 
+  mutate_if(is.numeric, as.character)
+  
+
+# 바꿀 수 없는 것들
+cant_replace_accountNo = data %>% 
+  filter(Username %in% Username_need_to_change) %>% 
+  distinct(accountNo, Username) %>% 
+  select(Username, accountNo) %>% 
+  arrange(Username) %>% 
+  group_by(Username) %>% 
+  mutate(indicator = n()) %>% 
+  filter(indicator == 1) %>% 
+  select(Username, accountNo)
+```
+
+- 바꿀 수 있는 것들부터 
+```{r}
+can_replace_accountNo
+
+# revalue를 써야하나?
+
+dict = c("1242000000"="1241999966",
+         "2064000000"="2063999729",
+         "1645000000"="1645000020",
+         "1326000000"="1325999618",
+         "2131000000"="2131000206",
+         "1745000000"= "1744999840" ,
+         "1041000000"= "1041000473",
+  "1561000000"="1561000040",
+  "1259000000"="1258999698",
+  "1896000000"="1896000385",
+  "806000000"="806000018",
+  "1947000000"="1946999577",
+  "1947000000"="1946999506",
+  "1762000000"="1761999504",
+  "1745000000"="1744999747",
+  "1527000000"="1526999796",
+  "1980000000"="1980000286",
+  "1376000000"="1376000026",
+  "1762000000"="1761999984",
+  "1494000000"="1494000389",
+  "1141000000"="1140999752",
+  "1594000000"="1594000337",
+  "1678000000"="1678000034",
+  "1544000000"= "1543999889",
+  "537000000"="537000010",
+  "1963000000"="1963000201",
+  "1225000000"="1224999512",
+  "1930000000"="1929999888",
+  "1527000000"="1526999883",
+  "1477000000"="1476999879",
+  "1292000000"="1292000497",
+  "1980000000"="1979999922",
+  "1796000000"="1795999515",
+  "940000000"="940000047"
+)
+
+
+data$accountNo = as.character(data$accountNo) %>% 
+  plyr::revalue(replace = dict)
+  
+```
+
+- 바꿀 수 없는 것들 (다 찾아서 넣어주기)
+```{r}
+
+original = cant_replace_accountNo %>% pull(accountNo) %>% as.character()
+
+replacement = c("2064000101",
+                "1225000280",
+                "1744999992",
+                "1325999792",
+                "1191999580",
+                "419999954",
+                "469999987",
+                "1242000329",
+                "1912999866",
+                "2081000213",
+                "닉변이고못찾음1",
+                "1325999804",
+                "1375999808",
+                "1980000011",
+                "1208000099",
+                "1660999846",
+                "2046999639",
+                "1912999932",
+                "957000011",
+                "닉변이고못찾음2",
+                "1158000000",
+                "2046999889",
+                "1358999539",
+                "1392999878",
+                "1946999692",
+                "1041000459",
+                "1695000027",
+                "2131000323",
+                "1191999760")
+
+
+data[Username == "chldbstn1", "accountNo"] = "2064000101"
+data[Username == "I오리날다U", "accountNo"] = "1225000280"
+data[Username == "ooO썸Ooo", "accountNo"] = "1744999992"
+data[Username == "SplitX크로즈", "accountNo"] = "1325999792"
+data[Username == "YouTube파덕", "accountNo"] = "1191999580"
+data[Username == "김학진짱짱멘", "accountNo"] = "419999954"
+data[Username == "까꿍몬", "accountNo"] ="469999987"
+data[Username == "나와아아아아", "accountNo"] = "1242000329"
+data[Username == "니개못생김", "accountNo"] = "1912999866"
+data[Username == "대승이덩이", "accountNo"] = "2081000213"
+data[Username == "로말레오2", "accountNo"] = "닉변이고못찾음1"
+data[Username == "미인차안", "accountNo"] = "1325999804"
+data[Username == "믿고있쥐", "accountNo"] = "1375999808"
+data[Username == "뱅호랑이", "accountNo"] = "1980000011"
+data[Username == "베스트", "accountNo"] = "1208000099"
+data[Username == "부라보카트짱", "accountNo"] = "1660999846"
+data[Username == "삐꾸금붕어", "accountNo"] = "2046999639"
+data[Username == "아이쿵했쩌요", "accountNo"] = "1912999932"
+data[Username == "앵두앵두네", "accountNo"] = "957000011"
+data[Username == "잠번지옥", "accountNo"] = "닉변이고못찾음2"
+data[Username == "잭소드", "accountNo"] = "1158000000"
+data[Username == "준원킹오른팔", "accountNo"] = "2046999889"
+data[Username == "지성이S2", "accountNo"] = "1358999539"
+data[Username == "진규짱짱vv", "accountNo"] = "1392999878"
+data[Username == "진둥이횸둥이", "accountNo"] = "1946999692"
+data[Username == "초등잼민", "accountNo"] = "1041000459"
+data[Username == "카트살짝함", "accountNo"] = "1695000027"
+data[Username == "하츄맘", "accountNo"] = "2131000323"
+data[Username == "헤으응라이더", "accountNo"] = "1191999760"
+
+
+data[Username == "yh10000", "accountNo"] = "1946999506"
+data[Username == "강휘파럄", "accountNo"] = "1744999747"
+data[Username == "두정동알파카", "accountNo"] = "1761999984"
+data[Username == "김EH리", "accountNo"] = "1526999883"
+data[Username == "훅그립", "accountNo"] = "1979999922"
+
+data[Username == "상큼레인지훈", "accountNo"] = "1963000201"
+data[Username == "상어부릉", "accountNo"] = "1543999889"
+data[Username == "Eternal황제o", "accountNo"] = "1744999840"
+data[Username == "개스님라이더", "accountNo"] = "1526999796"
+data[Username == "백기사하세요", "accountNo"] = "1678000034"
+data[Username == "Daiamonddust", "accountNo"] = "1325999618"
+data[Username == "yh10000", "accountNo"] = "1946999506"
+data[Username == "서폿차이고", "accountNo"] = "1929999888"
+data[Username == "VLOGBLADES", "accountNo"] = "806000018"
+data[Username == "VLOGBLADES", "accountNo"] = "806000018"
+data[Username == "VLOGBLADES", "accountNo"] = "806000018"
+data[Username == "VLOGBLADES", "accountNo"] = "806000018"
+
+
+df <- expand_grid(x = c("a", NA), y = c("b", NA))
+df
+
+df %>% unite("z", x:y, remove = FALSE, na.rm = T)
+
+
+```
+
+```{r}
+# 잘 됐는지 확인
+user_code_lst = data %>% 
+  filter(is.na(level)) %>% 
+  pull(accountNo) %>% 
+  unique
+
+
+new_level = getAllUserInfo(user_code_lst)
+
+data1 = left_join(data, new_level, by = c("accountNo"="accessId")) %>%
+  unite("level", level.x:level.y, na.rm = T, sep = "") %>% 
+  mutate(level = as.numeric(level)) %>% 
+  filter(level <= 999)
+
+data2 = left_join(data, new_level, by = c("accountNo"="accessId")) %>%
+  unite("level", level.x:level.y, na.rm = T, sep = "") %>% 
+  mutate(level = as.numeric(level)) %>% 
+  filter(level >= 1000 & level <= 9999) %>% 
+  mutate(level = level %/% 100)
+
+data3 = left_join(data, new_level, by = c("accountNo"="accessId")) %>%
+  unite("level", level.x:level.y, na.rm = T, sep = "") %>% 
+  mutate(level = as.numeric(level)) %>% 
+  filter(level >= 10000 & level <= 108108) %>% 
+  mutate(level = level %/% 1000)
+
+left_join(data, new_level, by = c("accountNo"="accessId")) %>%
+  unite("level", level.x:level.y, na.rm = T, sep = "") %>% 
+  filter(str_length(level) > 6) %>% 
+  mutate(level = NA)
+
+rbindlist(list(data1,data2,data3)) %>% arrange(startTime)
+
+
+```
+
+
+```{r}
+data1 = left_join(data, new_level, by = c("accountNo"="accessId")) %>%
+  unite("level", level.x:level.y, na.rm = T, sep = "") %>% 
+  mutate(level = as.numeric(level)) %>% 
+  filter(level <= 999)
+
+data2 = left_join(data, new_level, by = c("accountNo"="accessId")) %>%
+  unite("level", level.x:level.y, na.rm = T, sep = "") %>% 
+  mutate(level = as.numeric(level)) %>% 
+  filter(level >= 1000 & level <= 9999) %>% 
+  mutate(level = level %/% 100)
+
+data3 = left_join(data, new_level, by = c("accountNo"="accessId")) %>%
+  unite("level", level.x:level.y, na.rm = T, sep = "") %>% 
+  mutate(level = as.numeric(level)) %>% 
+  filter(level >= 10000 & level <= 108108) %>% 
+  mutate(level = level %/% 1000)
+
+data4 = left_join(data, new_level, by = c("accountNo"="accessId")) %>%
+  unite("level", level.x:level.y, na.rm = T, sep = "") %>% 
+  mutate(level = as.numeric(level)) %>% 
+  filter(level >= 108109 | is.na(level)) %>% 
+  mutate(level = NA)
+
+data4 = rbindlist(list(data1,data2,data3,data4)) %>% arrange(startTime)
+
+```
+
+```{r}
+write.csv(data4, "data_please.csv", fileEncoding = "cp949", row.names = F)
+```
+
+
+

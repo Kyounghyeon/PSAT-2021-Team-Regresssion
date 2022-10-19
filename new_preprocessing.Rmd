@@ -1,0 +1,441 @@
+---
+title: "Untitled"
+author: "Ko"
+date: '2021 11 5 '
+output: html_document
+---
+
+할 거
+1. 기본적인 전처리 (고유 코드 매칭, 범위 안 맞는 거 삭제)
+2. 유저 코드랑 매치코드(제대로 안 된 거 삭제하자) 제대로 됐는지
+3. 유저 레벨 받아오기 
+3-1. 레벨 이상한 애들 NA 처리
+5. 유저 거르기
+4. 맵 데이터 만들어주기(트랙9 :: 비치 / 더 월드 :: 월드)
+
+
+
+# 패키지
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(data.table)
+library(lubridate)
+library(magrittr)
+```
+
+
+
+```{r}
+track_df = jsonlite::fromJSON("metadata/track.json") %>% as_tibble() %>% rename(track = name)
+matchType_df = jsonlite::fromJSON("metadata/gameType.json") %>% as_tibble() %>% rename(match = name)
+character_df = jsonlite::fromJSON('metadata/character.json')
+flyingPet_df = jsonlite::fromJSON('metadata/flyingPet.json')
+pet_df = jsonlite::fromJSON('metadata/pet.json')
+kart_df = jsonlite::fromJSON('metadata/kart.json')
+```
+
+```{r}
+data_ = fread("../data_please.csv") %>% distinct
+```
+
+# 토요일 데이터 합치기
+```{r}
+# distinct 한번하기
+oct = rbindlist(list(fread("20211016-1.csv"), fread("20211016-2.csv"), fread("20211016-3.csv"), fread("20211016-4.csv"), fread("20211016-5.csv"), fread("20211016-6.csv"), fread("20211016-7.csv"), fread("20211016-8.csv"), fread("20211016-9.csv"),fread("20211016-10.csv"), fread("20211016-11.csv"), fread("20211016-12.csv")))
+oct = oct %>% distinct
+
+# 잘못된거맞는듯?
+data_ %>% 
+  filter(startTime >= ymd_hms("20211016090000") & startTime <= ymd_hms("20211017090000")) %>% 
+  pull(matchId) %>% unique %>% length
+```
+
+
+
+# 고유 코드 합치기
+```{r}
+X_df = tibble(id = "X", name = "X")
+character_df = rbind(character_df, X_df)
+flyingPet_df = rbind(flyingPet_df, X_df)
+kart_df = rbind(kart_df, X_df)
+pet_df = rbind(pet_df, X_df)
+
+character_df %<>% rename(characterName = name)
+flyingPet_df %<>% rename(flyingPetName = name)
+kart_df %<>% rename(kartName = name)
+pet_df %<>% rename(petName = name)
+```
+
+# 전처리
+
+```{r}
+data = oct
+data = data %>% distinct
+```
+
+```{r}
+data = left_join(data, track_df, by = c("trackId" = "id")) %>% 
+  left_join(matchType_df, by = c("matchType"="id")) %>% 
+  select(-matchType, -trackId, -license) %>% 
+  rename(trackId = "track",
+         matchType = "match") %>% 
+  filter(!is.na(trackId)) %>% 
+  filter(startTime >= ymd_hms("20211011000000")) %>% 
+  filter(startTime <= ymd_hms("20211017235959")) %>% 
+  relocate(startTime, .before = endTime) %>% 
+  relocate(matchTime, .before = playTime) %>% 
+  relocate(matchType, trackId, .after = matchId) %>% 
+  arrange(startTime)
+```
+
+
+
+# 고유 코드 합치고, 한국 표준시로 바꾸고
+```{r}
+data2 = data %>%
+  mutate_at(vars("pet", "flyingPet"), na_if, "") %>% 
+  replace_na(list(pet = "X",
+                  flyingPet = "X"
+                  #partsEngine=0,
+                  #partsWheel=0,
+                  #partsHandle=0,
+                  #partsKit=0)) %>%
+  )) %>% 
+  
+  rename(Username = characterName) %>% 
+  
+  # 메타 데이터와 결합
+  left_join(character_df, by = c("character" = "id")) %>% 
+  left_join(flyingPet_df, by = c("flyingPet" = "id")) %>% 
+  left_join(kart_df, by = c("kart" = "id")) %>% 
+  left_join(pet_df, by=c("pet" = "id")) %>% 
+  
+  # 한국 표준시로 변경
+  mutate(startTime = startTime + lubridate::hours(9),
+         endTime = endTime + lubridate::hours(9)) %>% 
+  
+  # 매치 종류 구분
+  separate(col=matchType, sep = " ", into = c("Speed_Item","Team_Indi")) %>% 
+  mutate(Speed_Item = ifelse(Speed_Item == "스피드", 1 ,0),
+         Team_Indi = ifelse(Team_Indi == "팀전", 1, 0)) %>% 
+  
+  # 매치 타임 분리
+  mutate(matchTime_sec = as.numeric(matchTime) %/% 1000,
+         matchTime_ms = as.numeric(matchTime) %% 1000,
+         .keep = "unused")
+
+
+```
+
+# 유저 코드 잘 됐는지? OK
+```{r}
+# 표기가 이상해서 바꿔야 하는 것들
+Username_need_to_change = data2 %>% 
+  mutate(accountNo = as.character(accountNo)) %>%
+  filter(str_detect(accountNo, "[e]")) %>% 
+  pull(Username) %>% unique
+
+options(scipen = 100)
+
+# 바꿀 수 있는 것들
+can_replace_accountNo = data %>% 
+  filter(Username %in% Username_need_to_change) %>% 
+  distinct(accountNo, Username) %>% 
+  select(Username, accountNo) %>% 
+  arrange(Username) %>% 
+  group_by(Username) %>%
+  mutate(indicator = n()) %>% 
+  filter(indicator == 2) %>% 
+  mutate(indicator = c("fisrt", "second")) %>% 
+  spread(key = indicator, value = accountNo) %>% 
+  mutate_if(is.numeric, as.character)
+  
+
+# 바꿀 수 없는 것들
+cant_replace_accountNo = data %>% 
+  filter(Username %in% Username_need_to_change) %>% 
+  distinct(accountNo, Username) %>% 
+  select(Username, accountNo) %>% 
+  arrange(Username) %>% 
+  group_by(Username) %>% 
+  mutate(indicator = n()) %>% 
+  filter(indicator == 1) %>% 
+  select(Username, accountNo)
+```
+
+# 매치 코드 잘 됐는지? OK
+```{r}
+data %>% filter(str_detect(matchId, "[.]"))
+```
+
+# 유저 레벨 불러오고 합치기
+```{r}
+exist_accountNo = data_ %>% pull(accountNo) %>% unique
+user_lst = data2 %>% 
+  filter(!(accountNo %in% exist_accountNo))%>% pull(accountNo) %>% unique
+
+user_info = getAllUserInfo(user_lst)
+user_info = user_info %>% rename(accountNo = accessId)
+exist_user_info = data_ %>% select(accountNo, level) %>% distinct
+user_info_new = rbind(user_info, exist_user_info)
+
+user_info_new["accountNo"=="151104658", "level"] = NA
+user_info_new["accountNo"=="285975433", "level"] = NA
+user_info_new["accountNo"=="1695207004", "level"] = NA
+user_info_new["accountNo"== "1946999506", "level"] = 4
+
+user_info_new
+user_info_new = user_info_new %>% distinct
+```
+
+# 기존 데이터와 토요일 데이터 합치기
+```{r}
+# 기존 데이터에서 202110160900~20211017085959 빼야함
+data3 = data_ %>% 
+  filter(startTime < ymd_hms("20211016090000") | startTime >= ymd_hms("20211017090000")) %>%
+  select(-level) %>% 
+  rbind(data2) %>% 
+  arrange(startTime)
+
+
+data3 %>% 
+  mutate(DATE = date(startTime)) %>% 
+  distinct(DATE,matchId) %>% 
+  group_by(DATE) %>% 
+  summarise(n())
+
+
+monday_matchId = data3 %>% 
+  filter(startTime >= ymd_hms("20211011090000") & startTime <= ymd_hms("20211012085959")) %>%
+  pull(matchId) %>% unique
+
+data3 %>% 
+  filter(startTime >= ymd_hms("20211012090000") & startTime <= ymd_hms("20211013085959"))
+
+set.seed(1)
+monday_matchId = sample(monday_matchId, 109127)
+
+data4 = rbindlist(list(data3 %>% 
+  filter(startTime >= ymd_hms("20211011090000") & startTime <= ymd_hms("20211012085959")) %>% 
+  filter(matchId %in% monday_matchId),
+  data3 %>% 
+  filter(!(startTime >= ymd_hms("20211011090000") & startTime <= ymd_hms("20211012085959")))))
+```
+
+```{r}
+data = data4
+remove(data4)
+```
+
+```{r}
+data = data %>% 
+  left_join(user_info_new, by = "accountNo")
+
+data %>% distinct
+```
+```{r}
+write.csv(data, "data_original.csv", fileEncoding = "cp949", row.names = F)
+```
+
+
+# 유저 거르기
+```{r}
+# 하루에 적어도 30분 이상 플레이한 유저들과 그 요일 플레이수
+data %>% 
+  # 접속 시간, 날짜
+  mutate(stayTime = playTime+10, 
+         day = weekdays(startTime, abbreviate = T)) %>% 
+  group_by(accountNo, day) %>% 
+  summarise(total_playTime = sum(stayTime),
+            N = n())
+
+# 그 유저들 유저 코드
+accountNo_10plays30mins = data %>% 
+  mutate(stayTime = playTime+10, 
+         day = weekdays(startTime, abbreviate = T)) %>% 
+  group_by(accountNo, day) %>% 
+  summarise(total_playTime = sum(stayTime),
+            N = n()) %>% 
+  ungroup %>% 
+  filter(total_playTime >= 1800 & N >= 10) %>% 
+  summarise(accountNo = unique(accountNo)) %>% pull(accountNo)
+
+#하루에 적어도 30분 이상 플레이한 유저들이 참가한 매치
+matchId_with_10plays30mins_user = data %>%
+  filter(accountNo %in% accountNo_10plays30mins) %>%
+  pull(matchId) %>% unique
+  
+# data %>% 
+#   filter(accountNo %in% accountNo_play30mins) %>% 
+#   group_by(accountNo) %>% 
+#   summarise(N=n()) %>%
+#   arrange(N) %>% 
+#   filter(N>=10)
+
+
+data2 = data %>% 
+  filter(matchId %in% matchId_with_10plays30mins_user)
+
+#write.csv(data2, "data_pleaseplase.csv", fileEncoding = "cp949", row.names = F)
+
+user_accountNo = data %>% 
+  select(accountNo, level) %>% distinct %>% 
+  filter(accountNo %in% accountNo_10plays30mins)
+
+#write.csv(user_accountNo, "user_please.csv", fileEncoding = "cp949", row.names = F)
+
+fread("user_pleaseplease.csv")
+```
+
+# 걸러진 유저들 레벨 분포 확인
+```{r}
+data %>%
+  group_by(accountNo) %>% 
+  # 기간 동안에 라이센스가 변경된 유저가 있어서 기간 동안의 최대값(가장 높은 라이센스)으로 바꿔줌
+  mutate(rankinggrade2 = max(rankinggrade2)) %>% 
+  distinct(accountNo, level, rankinggrade2) %>%
+  filter(!is.na(level)) %>% 
+  # 카트라이더 공식 레벨 기준으로 분류  
+  mutate(
+    levelCategory = cut(level, breaks = c(1,31,61,91,108,109),
+                        labels = c("glove", "starglove", "stars", "medal", "maxlevel"),
+                        include.lowest = T, right = F)
+  ) %>% 
+  ungroup %>% 
+  group_by(levelCategory) %>% 
+  summarise(count = n()) %>% 
+  ggplot(aes(x="", y=count, fill = levelCategory)) + 
+  geom_bar(width = 1, stat = "identity", alpha = .45) + 
+  coord_polar("y", start = 0) + 
+  theme_void()
+
+data %>% 
+  filter(accountNo %in% accountNo_10plays30mins) %>% 
+  group_by(accountNo) %>% 
+  # 기간 동안에 라이센스가 변경된 유저가 있어서 기간 동안의 최대값(가장 높은 라이센스)으로 바꿔줌
+  mutate(rankinggrade2 = max(rankinggrade2)) %>% 
+  distinct(accountNo, level, rankinggrade2) %>%
+  filter(!is.na(level)) %>% 
+  # 카트라이더 공식 레벨 기준으로 분류  
+  mutate(
+    levelCategory = cut(level, breaks = c(1,31,61,91,108,109),
+                        labels = c("glove", "starglove", "stars", "medal", "maxlevel"),
+                        include.lowest = T, right = F)
+  ) %>% 
+  ungroup %>% 
+  group_by(levelCategory) %>% 
+  summarise(count = n()) %>% 
+  ggplot(aes(x="", y=count, fill = levelCategory)) + 
+  geom_bar(width = 1, stat = "identity", alpha = .45) + 
+  coord_polar("y", start = 0) + 
+  theme_void()
+```
+
+# 맵 데이터 만들기
+- 왜 걸러진대로 했냐? 우리가 애초에 의미 있는 유저의 행동을 정하고 싶었으니까...
+- 이 유저들이 참여한 매치들로만 해야 맞겠다 싶었다..
+
+```{r}
+data = fread("data_pleaseplase.csv")
+map = fread("../data/final_map.csv")
+```
+
+```{r}
+map_dropped = map %>% select(맵이름, 트랙분류, 난이도, 랩, 총트랙길이=`트랙 길이(km)`, 진행방향=`진행 방향`, contains("개수"))
+
+
+# 맵별 매치별 리타이어율 
+map_retire = data[!is.na(matchRank), .N, by = c("matchId", "Speed_Item", "Team_Indi", "trackId", "matchRetired")] %>% 
+  spread(key = matchRetired, value = N) %>% 
+  rename("retire" = `1`, "finish"=`0`) %>% 
+  replace_na(list(finish = 0,
+                  retire = 0)) %>%
+  mutate_if(is.numeric, as.integer) %>% 
+  mutate(retire_ratio = retire/(finish+retire),
+         matchType = fifelse(Speed_Item == 1 & Team_Indi == 0, "스피드개인전",
+                             fifelse(Speed_Item == 1 & Team_Indi == 1, "스피드팀전",
+                                     fifelse(Speed_Item == 0 & Team_Indi == 0, "아이템개인전", "아이템팀전")))) %>% 
+  group_by(trackId, matchType) %>% 
+  summarise(retire_ratio = mean(retire_ratio)) %>% 
+  spread(key = matchType, value = retire_ratio)
+colnames(map_retire)[2:5] <- paste("리타", colnames(map_retire)[2:5], sep = "_")
+
+# 맵별 매치별 총 플레이 횟수
+map_played = data[!is.na(matchRank), .N, by = c("matchId", "Speed_Item", "Team_Indi", "trackId", "matchRetired")] %>% 
+  spread(key = matchRetired, value = N) %>% 
+  rename("retire" = `1`, "finish"=`0`) %>% 
+  replace_na(list(finish = 0,
+                  retire = 0)) %>%
+  mutate_if(is.numeric, as.integer) %>% 
+  mutate(retire_ratio = retire/(finish+retire),
+         matchType = fifelse(Speed_Item == 1 & Team_Indi == 0, "스피드개인전",
+                             fifelse(Speed_Item == 1 & Team_Indi == 1, "스피드팀전",
+                                     fifelse(Speed_Item == 0 & Team_Indi == 0, "아이템개인전", "아이템팀전")))) %>% 
+  group_by(trackId, matchType) %>% 
+  summarise(total_played = n()) %>% 
+  spread(key = matchType, value = total_played)
+colnames(map_played)[2:5] <- paste("플레이", colnames(map_played)[2:5], sep = "_")
+
+
+# 최종 맵 again
+map_inter = cbind(map_retire %>% ungroup, map_played %>% ungroup %>%  select(-trackId)) %>% 
+  replace_na(list(`리타_스피드개인전` = 0,
+                  `리타_스피드팀전` = 0,
+                  `리타_아이템개인전` = 0,
+                  `리타_아이템팀전` = 0,
+                  `플레이_스피드개인전` = 0,
+                  `플레이_스피드팀전` = 0,
+                  `플레이_아이템개인전` = 0,
+                  `플레이_아이템팀전` = 0)) %>% 
+  mutate(총플레이횟수 = `플레이_스피드개인전`+`플레이_스피드팀전`+`플레이_아이템개인전`+`플레이_아이템팀전`) %>% 
+  mutate(리타이어율 = (`리타_스피드개인전`*`플레이_스피드개인전` + `리타_스피드팀전`*`플레이_스피드팀전` + 
+                `리타_아이템개인전`*`플레이_아이템개인전` + `리타_아이템팀전`*`플레이_아이템팀전`) / 총플레이횟수) %>% 
+  select(맵이름 = trackId, 총플레이횟수, 리타이어율) %>% 
+  mutate(맵이름 = str_replace(맵이름, pattern = "(\\[.+\\]) (.+)", replacement = "\\2 R")) %>% 
+  right_join(map_dropped, by = "맵이름")
+
+# 트랙 9, 더 월드 테마 생성
+map_inter$`맵이름` = plyr::revalue(map_inter$`맵이름`, c("트랙 9"="비치 트랙 9", "더 월드"="월드 더 월드"))
+map_inter
+
+
+
+# 테마 분리
+map_final = map_inter %>% 
+  mutate(테마 = str_extract(맵이름, "\\w+"),
+           .after = 맵이름)
+
+# 저장
+#write.csv(map_final,"map_pleaseplease.csv",fileEncoding = "cp949", row.names = F)
+```
+
+```{r}
+cbind(map_retire %>% ungroup, map_played %>% ungroup %>%  select(-trackId)) %>% 
+  replace_na(list(`리타_스피드개인전` = 0,
+                  `리타_스피드팀전` = 0,
+                  `리타_아이템개인전` = 0,
+                  `리타_아이템팀전` = 0,
+                  `플레이_스피드개인전` = 0,
+                  `플레이_스피드팀전` = 0,
+                  `플레이_아이템개인전` = 0,
+                  `플레이_아이템팀전` = 0)) %>% 
+  mutate(총플레이횟수 = `플레이_스피드개인전`+`플레이_스피드팀전`+`플레이_아이템개인전`+`플레이_아이템팀전`) %>% 
+  mutate(리타이어율 = (`리타_스피드개인전`*`플레이_스피드개인전` + `리타_스피드팀전`*`플레이_스피드팀전` + 
+                `리타_아이템개인전`*`플레이_아이템개인전` + `리타_아이템팀전`*`플레이_아이템팀전`) / 총플레이횟수) %>% 
+  select(맵이름 = trackId, 리타이어율) %>% 
+  write.csv("301maps.csv", fileEncoding = "UTF-8", row.names = F)
+```
+
+
+```{r}
+data2 %>% 
+  mutate(DATE = weekdays(startTime),
+         HOUR = hour(startTime)) %>% 
+  distinct(matchId, .keep_all = T) %>% 
+  group_by(DATE, HOUR) %>% 
+  summarise(N=n()) %>% 
+  ggplot(aes(x=as.factor(HOUR), y=N)) +
+  geom_col() + 
+  facet_wrap(DATE~., nrow = 3)
+```
+
